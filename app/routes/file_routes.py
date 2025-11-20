@@ -7,8 +7,13 @@ from app.utils import find_red_class
 from app.database import get_db
 from app.models import Question
 import zipfile, shutil, os, tempfile
+from pdfminer.high_level import extract_text
 
 router = APIRouter()
+
+@router.options("/upload/")
+def upload_options():
+    return {"ok": True}
 
 @router.post("/upload/")
 async def upload_zips(
@@ -26,6 +31,30 @@ async def upload_zips(
         tmp_upload.write(content)
         tmp_upload.flush()
         tmp_upload.close()
+
+        if file.filename.lower().endswith('.pdf') or (file.content_type or '').lower() == 'application/pdf':
+            text = extract_text(tmp_upload.name) or ''
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            current_q = None
+            variants = []
+            for l in lines:
+                if l[0].isdigit() and '.' in l:
+                    if current_q:
+                        options_text = "\n".join(variants)
+                        q = Question(text=current_q, options=options_text, true_answer=None, image=None, category=category, subject=subject)
+                        db.add(q)
+                        db.commit()
+                    current_q = l
+                    variants = []
+                elif l.startswith(('A)', 'B)', 'C)', 'D)')):
+                    variants.append(l)
+            if current_q:
+                options_text = "\n".join(variants)
+                q = Question(text=current_q, options=options_text, true_answer=None, image=None, category=category, subject=subject)
+                db.add(q)
+                db.commit()
+            os.remove(tmp_upload.name)
+            continue
 
         extract_dir = tempfile.mkdtemp(prefix="extracted_")
         with zipfile.ZipFile(tmp_upload.name, 'r') as zip_ref:
